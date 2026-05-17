@@ -76,8 +76,10 @@ const Navigation = () => {
               const q = searchRef.current?.value.trim();
               if (q) {
                 navigate(`/home?q=${encodeURIComponent(q)}`);
-                searchRef.current.blur();
+              } else {
+                navigate('/home');
               }
+              searchRef.current?.blur();
             }}
           >
             <input
@@ -86,6 +88,11 @@ const Navigation = () => {
               type="search"
               placeholder="search posts or authors…"
               aria-label="Search posts"
+              onChange={(e) => {
+                if (!e.target.value) {
+                  navigate('/home');
+                }
+              }}
             />
             <button className="nav-search-btn" type="submit">
               🔍
