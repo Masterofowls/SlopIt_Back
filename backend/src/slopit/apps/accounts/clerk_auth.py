@@ -1,38 +1,14 @@
-"""Clerk JWT authentication for Django REST Framework.
-
-The frontend (using @clerk/clerk-react or similar) sends the Clerk session
-token as ``Authorization: Bearer <token>`` on every API request.
-
-This module:
-1. Validates the token against Clerk's JWKS endpoint.
-2. Looks up the Django User by ``clerk_id`` (the JWT ``sub`` claim).
-3. Creates a new Django User if one doesn't exist yet, or links an existing
-   allauth-created user by email so legacy accounts carry over seamlessly.
-4. Auto-detects and persists the OAuth provider (google / github / yandex / telegram)
-   as ``User.auth_method`` on every successful authentication.
-
-Required Fly secret::
-
-    flyctl secrets set CLERK_JWKS_URL=https://<clerk-domain>/.well-known/jwks.json
-
-If ``CLERK_JWKS_URL`` is not set (local dev without Clerk), this authenticator
-is skipped and Django falls back to session auth.
-
-Debug logging
--------------
-Set the ``accounts.clerk_auth`` logger to DEBUG to see full structured traces
-of every auth attempt, including detected provider and any error context.
-"""
-
 from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 import jwt
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import DataError
 from jwt import PyJWKClient
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
@@ -46,13 +22,14 @@ User = get_user_model()
 # Module-level JWKS client — shared across requests, caches signing keys.
 _jwks_client: PyJWKClient | None = None
 
+# Per-user Clerk Backend API cache: {clerk_id: (monotonic_ts, api_claims_dict)}
+_clerk_api_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_CLERK_API_CACHE_TTL = 300  # seconds
+
 # Image-URL patterns used to identify the OAuth provider from the Clerk JWT.
 _GOOGLE_PATTERN = re.compile(r"googleusercontent\.com", re.IGNORECASE)
 _GITHUB_PATTERN = re.compile(r"avatars\.githubusercontent\.com", re.IGNORECASE)
-_YANDEX_AVATAR_PATTERN = re.compile(
-    r"avatars\.yandex\.(?:net|ru)|yastatic\.net",
-    re.IGNORECASE,
-)
+_SOCIAL_AVATAR_FALLBACK_MAX_LEN = 200
 
 
 def _claim_text(claims: dict[str, Any], *keys: str) -> str:
@@ -123,12 +100,83 @@ def _extract_image_url(claims: dict[str, Any]) -> str:
     )
 
 
-def _claim_provider_hint(claims: dict[str, Any]) -> str:
-    """Extract a likely OAuth provider hint from Clerk token claims.
+def _enrich_claims_from_clerk_api(
+    clerk_id: str,
+    claims: dict[str, Any],
+) -> dict[str, Any]:
 
-    Clerk's token shape can vary across social connections and custom providers,
-    so we only inspect provider-like fields instead of scanning every value.
-    """
+    secret_key: str = getattr(settings, "CLERK_SECRET_KEY", "")
+    if not secret_key:
+        return claims
+
+    # Fast path — serve from cache while TTL is valid.
+    cached = _clerk_api_cache.get(clerk_id)
+    if cached and (time.monotonic() - cached[0]) < _CLERK_API_CACHE_TTL:
+        enriched = {**claims, **cached[1]}
+        logger.debug("[clerk_auth] Served Clerk API profile from cache for %s", clerk_id)
+        return enriched
+
+    try:
+        import httpx
+
+        resp = httpx.get(
+            f"https://api.clerk.com/v1/users/{clerk_id}",
+            headers={"Authorization": f"Bearer {secret_key}"},
+            timeout=5.0,
+        )
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+    except Exception as exc:
+        logger.warning("[clerk_auth] Clerk Backend API call failed for %s: %s", clerk_id, exc)
+        return claims
+
+    api_claims: dict[str, Any] = {}
+
+    # 1. Prefer the top-level Clerk fields so the database stores Clerk's own
+    #    default username/avatar when provider-specific profile data is missing.
+    for field in ("image_url", "first_name", "last_name", "username"):
+        val = data.get(field)
+        if val and isinstance(val, str):
+            api_claims[field] = val
+
+    # 2. External accounts — preserve them for provider detection, but do not
+    #    copy provider-specific name/photo fields into the user profile.
+    external_accounts: list[dict[str, Any]] = data.get("external_accounts") or []
+    if external_accounts:
+        api_claims["external_accounts"] = external_accounts
+        for ea in external_accounts:
+            provider = str(ea.get("provider") or "").lower()
+            if provider and not api_claims.get("provider"):
+                api_claims["provider"] = provider
+
+    # 3. Primary email — Clerk stores it as an array with a pointer.
+    email_addresses: list[dict[str, Any]] = data.get("email_addresses") or []
+    primary_id: str = data.get("primary_email_address_id") or ""
+    for ea_email in email_addresses:
+        if ea_email.get("id") == primary_id:
+            addr = ea_email.get("email_address") or ""
+            if addr and not addr.endswith("@no-email.local"):
+                api_claims["email"] = addr
+            break
+
+    _clerk_api_cache[clerk_id] = (time.monotonic(), api_claims)
+
+    enriched = {**claims, **api_claims}
+    logger.info(
+        "[clerk_auth] Enriched claims from Clerk API for %s: "
+        "added=%s first_name=%r last_name=%r username=%r image_url=%r provider=%r",
+        clerk_id,
+        list(api_claims.keys()),
+        api_claims.get("first_name"),
+        api_claims.get("last_name"),
+        api_claims.get("username"),
+        api_claims.get("image_url"),
+        api_claims.get("provider"),
+    )
+    return enriched
+
+
+def _claim_provider_hint(claims: dict[str, Any]) -> str:
 
     provider_keys = {
         "provider",
@@ -234,16 +282,7 @@ def _detect_auth_method(
     claims: dict[str, Any],
     has_telegram_id: bool = False,
 ) -> str:
-    """Infer which OAuth provider the user authenticated with.
 
-    Detection order (most-specific first):
-    1. Telegram — user has a ``telegram_id`` in the database.
-    2. Provider hints embedded in Clerk claims (recommended for custom OIDC).
-    3. Yandex   — ``image_url`` matches Yandex avatar hosts.
-    4. GitHub   — ``image_url`` is an avatars.githubusercontent.com URL.
-    5. Google   — ``image_url`` is a lh3.googleusercontent.com URL.
-    6. Unknown  — return empty string (displayed as blank in admin).
-    """
     if has_telegram_id:
         detected = "telegram"
     else:
@@ -251,8 +290,6 @@ def _detect_auth_method(
         image_url = _extract_image_url(claims)
         if provider_hint:
             detected = provider_hint
-        elif _YANDEX_AVATAR_PATTERN.search(image_url):
-            detected = "yandex"
         elif _GITHUB_PATTERN.search(image_url):
             detected = "github"
         elif _GOOGLE_PATTERN.search(image_url):
@@ -336,9 +373,21 @@ def _sync_clerk_profile(user: Any, claims: dict[str, Any]) -> None:
     # Avatar URL — update Profile row only when the value changes.
     image_url = _extract_image_url(claims)
     if image_url:
-        Profile.objects.filter(user=user).exclude(social_avatar_url=image_url).update(
-            social_avatar_url=image_url
-        )
+        try:
+            Profile.objects.filter(user=user).exclude(social_avatar_url=image_url).update(
+                social_avatar_url=image_url
+            )
+        except DataError:
+            truncated_url = image_url[:_SOCIAL_AVATAR_FALLBACK_MAX_LEN]
+            Profile.objects.filter(user=user).exclude(social_avatar_url=truncated_url).update(
+                social_avatar_url=truncated_url
+            )
+            logger.warning(
+                "[clerk_auth] Truncated social avatar URL for user pk=%s from %d to %d chars",
+                user.pk,
+                len(image_url),
+                len(truncated_url),
+            )
 
 
 def get_or_create_from_clerk(claims: dict[str, Any]) -> Any:
@@ -353,8 +402,8 @@ def get_or_create_from_clerk(claims: dict[str, Any]) -> Any:
     call so the frontend always sees up-to-date display info without a
     separate webhook.
     """
-    clerk_id: str = claims.get("sub", "")
-    if not clerk_id:
+    clerk_id_raw: str = claims.get("sub", "")
+    if not clerk_id_raw:
         logger.error(
             "[clerk_auth] Token missing 'sub' claim — cannot identify user.",
             extra={
@@ -365,15 +414,27 @@ def get_or_create_from_clerk(claims: dict[str, Any]) -> Any:
         )
         raise AuthenticationFailed("Token missing required 'sub' claim.")
 
+    # Clerk IDs are effectively case-insensitive for our identity mapping.
+    # Canonicalize to lowercase so relogins with different letter casing still
+    # resolve to the same Django user/profile.
+    clerk_id = clerk_id_raw.lower()
+
     logger.debug(
         "[clerk_auth] Resolving user for clerk_id=%s email=%r",
         clerk_id,
         claims.get("email"),
     )
 
+    # Enrich JWT claims with the full Clerk Backend API profile.
+    # Keep Clerk's own default identity fields when provider data is sparse.
+    claims = _enrich_claims_from_clerk_api(clerk_id_raw, claims)
+
     # 1. Fast path — already linked.
     try:
-        user = User.objects.get(clerk_id=clerk_id)
+        user = User.objects.get(clerk_id__iexact=clerk_id)
+        if user.clerk_id != clerk_id:
+            user.clerk_id = clerk_id
+            user.save(update_fields=["clerk_id"])
         logger.debug(
             "[clerk_auth] Fast-path hit: user pk=%s clerk_id=%s auth_method=%r",
             user.pk,

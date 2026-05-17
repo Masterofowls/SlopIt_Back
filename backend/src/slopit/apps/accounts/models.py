@@ -76,7 +76,7 @@ class Profile(models.Model):
         blank=True,
     )
     website_url = models.URLField(blank=True, max_length=200)
-    social_avatar_url = models.URLField(blank=True)
+    social_avatar_url = models.URLField(blank=True, max_length=500)
     feed_lifetime_hours = models.PositiveSmallIntegerField(
         default=10,
         validators=[

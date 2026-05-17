@@ -4,10 +4,12 @@ import logging
 
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from django.core.exceptions import MultipleObjectsReturned
+from django.db import DataError
 
 from apps.accounts.models import Profile
 
 logger = logging.getLogger(__name__)
+_SOCIAL_AVATAR_FALLBACK_MAX_LEN = 200
 
 
 class SocialAccountAdapter(DefaultSocialAccountAdapter):
@@ -29,9 +31,7 @@ class SocialAccountAdapter(DefaultSocialAccountAdapter):
         frontend_url = getattr(settings, "FRONTEND_URL", "").rstrip("/")
         return f"{frontend_url}/home"
 
-    def get_app(
-        self, request: object, provider: object, client_id: object = None
-    ) -> object:
+    def get_app(self, request: object, provider: object, client_id: object = None) -> object:
         try:
             return super().get_app(request, provider=provider, client_id=client_id)
         except MultipleObjectsReturned:
@@ -61,9 +61,7 @@ class SocialAccountAdapter(DefaultSocialAccountAdapter):
         if sociallogin.is_existing:
             self._sync_avatar(sociallogin)
 
-    def save_user(
-        self, request: object, sociallogin: object, form: object = None
-    ) -> object:
+    def save_user(self, request: object, sociallogin: object, form: object = None) -> object:
         user = super().save_user(request, sociallogin, form)
         self._sync_avatar(sociallogin, user=user)
         return user
@@ -76,4 +74,9 @@ class SocialAccountAdapter(DefaultSocialAccountAdapter):
             return
         target_user = user or sociallogin.user
         if target_user and target_user.pk:
-            Profile.objects.filter(user_id=target_user.pk).update(social_avatar_url=url)
+            try:
+                Profile.objects.filter(user_id=target_user.pk).update(social_avatar_url=url)
+            except DataError:
+                Profile.objects.filter(user_id=target_user.pk).update(
+                    social_avatar_url=url[:_SOCIAL_AVATAR_FALLBACK_MAX_LEN]
+                )

@@ -4,3 +4,9 @@
 .env.*
 !.env.example
 /TODO
+/backend/tests/__pycache__
+/backend/.venv
+/backend/.pytest_cache
+/frontend/node_modules
+.vscode
+/backend/.coverage

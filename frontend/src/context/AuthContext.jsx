@@ -71,10 +71,12 @@ export function AuthProvider({ children }) {
           clerkUser?.firstName ||
           (!isClerkId(clerkUser?.username) ? clerkUser?.username : null) ||
           (clerkEmail ? clerkEmail.split("@")[0] : null);
+        const backendName =
+          d.display_name || d.username || (d.email ? d.email.split("@")[0] : null);
         setClerkProfile({
           username: d.username ?? null,
           email: clerkEmail ?? d.email ?? null,
-          displayName: d.display_name || clerkName || null,
+          displayName: backendName || clerkName || null,
           avatarUrl:
             clerkUser?.imageUrl ?? d.avatar_url ?? d.social_avatar_url ?? null,
           bio: d.bio ?? null,

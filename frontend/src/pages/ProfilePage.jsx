@@ -6,9 +6,7 @@ import FrogBackground from "../components/ToxicBackground";
 import "./ProfilePage.css";
 
 const clean = (s) =>
-  s && !/^(clerk_|k_)?user_[a-z0-9]{6,}/i.test(s) && !/^user\d+$/i.test(s)
-    ? s
-    : null;
+  s && !/^user\d+$/i.test(s) ? s : null;
 
 const ProfilePage = () => {
   const { user, isLoaded } = useUser();
@@ -40,7 +38,7 @@ const ProfilePage = () => {
   const displayName =
     profile?.display_name ||
     clean(user?.fullName) ||
-    clean(profile?.username) ||
+    profile?.username ||
     "ANON";
   const avatarUrl =
     profile?.avatar_url ||
@@ -119,8 +117,8 @@ const ProfilePage = () => {
           </div>
           <div className="pp-identity">
             <h1 className="pp-displayname">{displayName}</h1>
-            {clean(profile?.username) && (
-              <p className="pp-username">@{clean(profile.username)}</p>
+            {profile?.username && (
+              <p className="pp-username">@{profile.username}</p>
             )}
             {profile?.bio && <p className="pp-bio">{profile.bio}</p>}
           </div>

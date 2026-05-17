@@ -16,7 +16,15 @@ class UserBriefSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "username", "display_name", "first_name", "last_name", "email", "avatar_url"]
+        fields = [
+            "id",
+            "username",
+            "display_name",
+            "first_name",
+            "last_name",
+            "email",
+            "avatar_url",
+        ]
         read_only_fields = fields
 
     def get_avatar_url(self, obj: User) -> str | None:
@@ -58,7 +66,7 @@ class UserBriefSerializer(serializers.ModelSerializer):
         return str(user.pk)
 
     def get_display_name(self, obj: User) -> str | None:
-        """Return a human-readable name, never a raw Clerk user_xxx ID.
+        """Return the best available human-readable name for this user.
 
         Priority: user-set profile.display_name > Clerk full name >
         username > email prefix > fallback.
@@ -81,7 +89,7 @@ class UserBriefSerializer(serializers.ModelSerializer):
         full = " ".join(filter(None, [obj.first_name, obj.last_name])).strip()
         if full:
             return full
-        if obj.username and not is_clerk_id(obj.username) and not is_placeholder(obj.username):
+        if obj.username and not is_placeholder(obj.username):
             return obj.username
         if obj.email and not is_sentinel_email(obj.email):
             return obj.email.split("@")[0]
@@ -132,6 +140,20 @@ class ProfileSerializer(serializers.ModelSerializer):
             return obj.social_avatar_url
         seed = self._avatar_seed_for_profile(obj)
         return generate_avatar_data_url(seed)
+
+    def to_representation(self, instance: Profile) -> dict[str, object]:
+        """Expose a stable display_name in API responses.
+
+        Keep ``display_name`` writable for PATCH, but when it's blank return an
+        effective fallback derived from user fields so the client never receives
+        an empty name for authenticated users.
+        """
+        data = super().to_representation(instance)
+        if not data.get("display_name"):
+            data["display_name"] = UserBriefSerializer(instance.user).get_display_name(
+                instance.user
+            )
+        return data
 
     @staticmethod
     def _avatar_seed_for_profile(profile: "Profile") -> str:  # type: ignore[name-defined]
@@ -228,11 +250,11 @@ class PublicProfileSerializer(serializers.ModelSerializer):
         full = " ".join(filter(None, [user.first_name, user.last_name])).strip()
         if full:
             return full
-        if user.username and not is_clerk_id(user.username):
+        if user.username:
             return user.username
         if user.email:
             return user.email.split("@")[0]
-        return "anon"
+        return f"User {obj.user_id}"
 
     def get_avatar_url(self, obj: Profile) -> str | None:
         """Priority: user-uploaded avatar > social/Clerk avatar URL > local generated avatar."""

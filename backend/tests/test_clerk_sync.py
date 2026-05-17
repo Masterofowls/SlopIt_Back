@@ -1,8 +1,50 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from django.utils import timezone
 from rest_framework.test import APIClient, APIRequestFactory
+
+
+def test_enrich_claims_keeps_clerk_defaults_for_yandex_profile_data() -> None:
+    from apps.accounts import clerk_auth
+
+    class DummyResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "username": "user_clerk_default",
+                "image_url": "https://clerk.example.com/default.png",
+                "external_accounts": [
+                    {
+                        "provider": "yandex",
+                        "first_name": "Ivan",
+                        "last_name": "Petrov",
+                        "username": "ivan.petrov",
+                        "image_url": "https://avatars.yandex.net/get-yapic/123/islands-200",
+                    }
+                ],
+            }
+
+    with (
+        patch.object(clerk_auth.settings, "CLERK_SECRET_KEY", "secret", create=True),
+        patch(
+            "httpx.get",
+            return_value=DummyResponse(),
+        ),
+    ):
+        claims = clerk_auth._enrich_claims_from_clerk_api(
+            "user_clerk_default",
+            {"sub": "user_clerk_default"},
+        )
+
+    assert claims["username"] == "user_clerk_default"
+    assert claims["image_url"] == "https://clerk.example.com/default.png"
+    assert claims["provider"] == "yandex"
+    assert claims["external_accounts"][0]["username"] == "ivan.petrov"
 
 
 @pytest.mark.django_db
@@ -83,27 +125,6 @@ def test_clerk_authentication_persists_user_on_authenticated_request() -> None:
     assert User.objects.filter(clerk_id="user_clerk_request", email="request@example.com").exists()
 
 
-@pytest.mark.django_db
-def test_get_or_create_from_clerk_supports_name_and_avatar_fallback_claims() -> None:
-    from apps.accounts.clerk_auth import get_or_create_from_clerk
-
-    claims = {
-        "sub": "user_clerk_yandex_like",
-        "email": "yandex-like@example.com",
-        "name": "Ivan Petrov",
-        "picture": "https://avatars.yandex.net/get-yapic/12345/islands-200",
-    }
-
-    user = get_or_create_from_clerk(claims)
-    user.refresh_from_db()
-
-    assert user.first_name == "Ivan"
-    assert user.last_name == "Petrov"
-    assert user.profile.social_avatar_url == (
-        "https://avatars.yandex.net/get-yapic/12345/islands-200"
-    )
-
-
 def _bearer_headers() -> dict[str, str]:
     return {"HTTP_AUTHORIZATION": "Bearer test-token"}
 
@@ -127,6 +148,7 @@ def test_auth_session_view_uses_clerk_bearer_user() -> None:
     assert response.status_code == 200
     assert response.data["authenticated"] is True
     assert response.data["user"]["username"] == "sessionuser"
+    assert response.data["user"]["display_name"] == "sessionuser"
     assert response.data["user"]["profile"]["email"] == "session@example.com"
 
 
@@ -328,6 +350,7 @@ def test_me_endpoint_returns_profile_for_clerk_authenticated_user() -> None:
 
     assert response.status_code == 200
     assert response.data["username"] == "meuser"
+    assert response.data["display_name"] == "meuser"
     assert response.data["email"] == "me@example.com"
     assert response.data["avatar_url"] == "https://images.example.com/me.png"
 
@@ -359,6 +382,52 @@ def test_me_patch_updates_profile_for_clerk_authenticated_user() -> None:
     assert response.status_code == 200
     assert response.data["bio"] == "updated via clerk"
     assert response.data["website_url"] == "https://example.com/profile"
+
+
+@pytest.mark.django_db
+def test_mixed_case_clerk_sub_reuses_same_user_and_profile() -> None:
+    from unittest.mock import patch
+
+    from apps.accounts.models import Profile, User
+
+    client = APIClient()
+
+    with patch(
+        "apps.accounts.clerk_auth._verify_clerk_token",
+        return_value={
+            "sub": "user_AbCdEf123456",
+            "email": "case@example.com",
+            "username": "user_abcdef123456",
+        },
+    ):
+        first = client.patch(
+            "/api/v1/me/",
+            {
+                "display_name": "Case User",
+                "bio": "persists",
+            },
+            format="json",
+            **_bearer_headers(),
+        )
+
+    assert first.status_code == 200
+    user = User.objects.get(email="case@example.com")
+    assert user.clerk_id == "user_abcdef123456"
+    assert Profile.objects.get(user=user).display_name == "Case User"
+
+    with patch(
+        "apps.accounts.clerk_auth._verify_clerk_token",
+        return_value={
+            "sub": "user_abcdef123456",
+            "email": "case@example.com",
+            "username": "user_abcdef123456",
+        },
+    ):
+        second = client.get("/api/v1/me/", **_bearer_headers())
+
+    assert second.status_code == 200
+    assert second.data["display_name"] == "Case User"
+    assert second.data["bio"] == "persists"
 
 
 @pytest.mark.django_db
