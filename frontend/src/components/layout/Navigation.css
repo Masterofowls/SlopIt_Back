@@ -18,10 +18,6 @@
   gap: 12px;
 }
 
-.nav-profile {
-  z-index: 100000000000000000000000;
-}
-
 .nav-brand {
   cursor: pointer;
   display: flex;
@@ -31,7 +27,7 @@
 
 .nav-brand h1 {
   margin: 0;
-  font-size: 24px;
+  font-size: 36px;
   font-weight: 700;
   color: #09ff00;
 }
@@ -71,7 +67,8 @@
 }
 
 .logout-button,
-.login-button {
+.login-button,
+.nav-profile {
   padding: 8px 16px;
   background: #00ff15;
   color: rgb(3, 17, 1);
@@ -84,7 +81,8 @@
 }
 
 .logout-button:hover,
-.login-button:hover {
+.login-button:hover,
+.nav-profile:hover {
   background: #11cc00;
 }
 
@@ -172,7 +170,6 @@
 
   .manage-button,
   .login-button,
-  .nav-profile,
   .navigation .new-post-btn {
     font-size: 12px;
     padding: 5px 9px;
@@ -322,16 +319,18 @@
 }
 
 .nav-search-input {
-  background: #001a00;
+  background: #00d800;
   border: 1px solid #005500;
   border-radius: 4px;
-  color: #00ff00;
+  color: #f1f8f1;
   font-family: "Courier New", Courier, monospace;
   font-size: 13px;
   padding: 6px 10px;
   width: 220px;
   outline: none;
-  transition: border-color 0.15s, width 0.2s;
+  transition:
+    border-color 0.15s,
+    width 0.2s;
 }
 
 .nav-search-input:focus {
@@ -349,10 +348,10 @@
 }
 
 .nav-search-btn {
-  background: transparent;
-  border: 1px solid #005500;
+  background: #00d800;
+  border: 1px solid #00fd00;
   border-radius: 4px;
-  color: #00cc00;
+  color: #ececec;
   cursor: pointer;
   font-size: 14px;
   padding: 5px 8px;
@@ -362,7 +361,7 @@
 
 .nav-search-btn:hover {
   border-color: #00ff00;
-  color: #00ff00;
+  background-color: #00ff00;
 }
 
 @media (max-width: 768px) {

@@ -126,10 +126,10 @@
 
 @keyframes hazardSlide {
   0% {
-    background-position: 0 0;
+    background-position: -20px 0;
   }
   100% {
-    background-position: 60px 0;
+    background-position: 10px 0;
   }
 }
 

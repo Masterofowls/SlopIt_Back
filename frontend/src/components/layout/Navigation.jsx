@@ -27,6 +27,7 @@ const Navigation = () => {
           >
             Login
           </button>
+
           <button className="nav-profile" onClick={() => navigate("/profile")}>
             Profile
           </button>
@@ -35,10 +36,7 @@ const Navigation = () => {
     }
     return (
       <>
-        <button
-          className="new-post-btn"
-          onClick={() => setShowPostModal(true)}
-        >
+        <button className="new-post-btn" onClick={() => setShowPostModal(true)}>
           + Post
         </button>
         <div className="nav-user-actions">
@@ -49,7 +47,9 @@ const Navigation = () => {
             className="manage-button"
             aria-label="Manage"
           >
-            <span className="manage-icon" aria-hidden="true">⚙</span>
+            <span className="manage-icon" aria-hidden="true">
+              ⚙
+            </span>
             <span className="manage-label">Manage</span>
           </a>
           <UserButton afterSignOutUrl="/" />
@@ -87,7 +87,9 @@ const Navigation = () => {
               placeholder="search posts or authors…"
               aria-label="Search posts"
             />
-            <button className="nav-search-btn" type="submit">🔍</button>
+            <button className="nav-search-btn" type="submit">
+              🔍
+            </button>
           </form>
 
           <div className="nav-user">{renderUserArea()}</div>
@@ -137,8 +139,6 @@ const Navigation = () => {
           </div>
         </div>
       )}
-
-
     </>
   );
 };

@@ -12,7 +12,6 @@ import { useAuthContext } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import "./Post.css";
 
-
 function resolveAuthorName(author) {
   if (!author) return "anon";
   const isClerkId = (s) =>
@@ -324,12 +323,12 @@ const Post = ({ post, children }) => {
           initialBookmarked={post.is_bookmarked ?? false}
         />
       </div>
-      <div className="post-toxicity">
+      {/* <div className="post-toxicity">
         <ToxicityMeter
           likeCount={localLikeCount}
           dislikeCount={post.reaction_counts?.dislike ?? 0}
         />
-      </div>
+      </div> */}
 
       {showComments && post.id && <CommentSection postId={post.id} />}
     </Card>
